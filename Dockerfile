@@ -1,4 +1,4 @@
-FROM busybox:musl@sha256:e8f62bb9c8bc88ae66f935a1621ad13dbf1bb899ad5db1dd0e3c5cb21ae1a414 AS selector
+FROM busybox:musl AS selector
 ARG TARGETPLATFORM
 COPY zig-out/bin/sayt-linux-x64 /sayt-linux-amd64
 COPY zig-out/bin/sayt-linux-arm64 /sayt-linux-arm64
