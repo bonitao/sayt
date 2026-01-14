@@ -152,11 +152,26 @@ pub fn main() !void {
         try child_args.appendSlice(&.{ "tool-stub", nu_toml, sayt_nu });
     } else {
         const ver = getEnvVar(alloc, "SAYT_VERSION") orelse "latest";
-        const sayt_ver = try std.fmt.allocPrint(alloc, "github:igorgatis/sayt@{s}", .{ver});
-        const bin = if (builtin.os.tag == .linux)
-            (if (builtin.cpu.arch == .x86_64) "sayt-amd64.elf" else "sayt-arm64.elf")
-        else
-            "sayt.com";
+        const sayt_ver = try std.fmt.allocPrint(alloc, "github:bonitao/sayt@{s}", .{ver});
+        const bin = switch (builtin.os.tag) {
+            .linux => switch (builtin.cpu.arch) {
+                .x86_64 => "sayt-linux-x64",
+                .aarch64 => "sayt-linux-arm64",
+                .arm => "sayt-linux-armv7",
+                else => "sayt-linux-x64", // Fallback or error? defaulting to x64 for unknown linux
+            },
+            .macos => switch (builtin.cpu.arch) {
+                .x86_64 => "sayt-macos-x64",
+                .aarch64 => "sayt-macos-arm64",
+                else => "sayt-macos-arm64", // Fallback
+            },
+            .windows => switch (builtin.cpu.arch) {
+                .x86_64 => "sayt-windows-x64.exe",
+                .aarch64 => "sayt-windows-arm64.exe",
+                else => "sayt-windows-x64.exe", // Fallback
+            },
+            else => "sayt-linux-x64", // Fallback
+        };
         try child_args.appendSlice(&.{ "exec", sayt_ver, "--", bin });
     }
 
