@@ -1,5 +1,9 @@
 $ErrorActionPreference = "Stop"
-$Version = if ($env:SAYT_VERSION) { $env:SAYT_VERSION } else { "0.0.6" }
+$Version = if ($env:SAYT_VERSION) { $env:SAYT_VERSION } else { "v0.0.7" }
+if (-not ($Version.StartsWith("v")) -and $Version -ne "latest") {
+    $Version = "v$Version"
+}
+$env:SAYT_VERSION = $Version
 $CacheDir = if ($env:LOCALAPPDATA) {
     Join-Path $env:LOCALAPPDATA "sayt"
 } elseif ($env:XDG_CACHE_HOME) {
@@ -23,7 +27,7 @@ $SaytLink = Join-Path $CacheDir "sayt.exe"
 
 if (-not (Test-Path $Binary)) {
     New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null
-    Write-Host "Downloading sayt v$Version ($BinName)..."
+    Write-Host "Downloading sayt $Version ($BinName)..."
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri "https://github.com/bonitao/sayt/releases/download/$Version/$BinName" -OutFile $Binary -UseBasicParsing
     

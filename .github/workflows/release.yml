@@ -65,6 +65,53 @@ jobs:
           VERSION=${{ steps.version.outputs.version }}
           zip -r binaries/sayt-${VERSION}.zip . -x "zig-out/*" "binaries/*" ".git/*" ".github/*"
 
+      - name: Build full dist archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_files=(
+            sayt.nu
+            tools.nu
+            dind.nu
+            config.cue
+            nu.toml
+            docker.toml
+            uvx.toml
+            cue.toml
+            .mise.toml
+          )
+
+          build_tar() {
+            local name="$1"
+            local bin="$2"
+            local dir="dist/$name"
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            cp -a "${core_files[@]}" "$dir/"
+            cp "$bin" "$dir/sayt"
+            chmod +x "$dir/sayt"
+            tar -czf "binaries/$name.tar.gz" -C "$dir" .
+          }
+
+          build_zip() {
+            local name="$1"
+            local bin="$2"
+            local dir="dist/$name"
+            rm -rf "$dir"
+            mkdir -p "$dir"
+            cp -a "${core_files[@]}" "$dir/"
+            cp "$bin" "$dir/sayt.exe"
+            (cd "$dir" && zip -r "../../binaries/$name.zip" . >/dev/null)
+          }
+
+          build_tar "sayt-linux-x64" "binaries/sayt-linux-x64"
+          build_tar "sayt-linux-arm64" "binaries/sayt-linux-arm64"
+          build_tar "sayt-linux-armv7" "binaries/sayt-linux-armv7"
+          build_tar "sayt-macos-x64" "binaries/sayt-macos-x64"
+          build_tar "sayt-macos-arm64" "binaries/sayt-macos-arm64"
+          build_zip "sayt-windows-x64" "binaries/sayt-windows-x64.exe"
+          build_zip "sayt-windows-arm64" "binaries/sayt-windows-arm64.exe"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -118,7 +165,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: Dockerfile
+          file: plugins/sayt/Dockerfile
           target: release
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true

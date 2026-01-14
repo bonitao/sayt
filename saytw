@@ -1,7 +1,11 @@
 #!/bin/sh
 set -e
 
-SAYT_VERSION="${SAYT_VERSION:-0.0.6}"
+SAYT_VERSION="${SAYT_VERSION:-v0.0.7}"
+if [ "${SAYT_VERSION#v}" = "$SAYT_VERSION" ] && [ "$SAYT_VERSION" != "latest" ]; then
+  SAYT_VERSION="v$SAYT_VERSION"
+fi
+export SAYT_VERSION
 SAYT_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/sayt"
 
 # Detect OS and Arch
@@ -52,7 +56,7 @@ download_file() {
 }
 
 if [ ! -x "$SAYT_BIN" ]; then
-  echo "Downloading sayt v${SAYT_VERSION} ($BIN_NAME)..." >&2
+  echo "Downloading sayt ${SAYT_VERSION} ($BIN_NAME)..." >&2
   if download_file "$SAYT_URL" "$SAYT_BIN"; then
     chmod +x "$SAYT_BIN"
     ln -sf "$SAYT_BIN" "$SAYT_LINK"

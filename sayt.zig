@@ -1,34 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const DEFAULT_VERSION = "v0.0.7";
 const MISE_VERSION = "v2025.11.11";
 const MISE_URL_BASE = "https://github.com/jdx/mise/releases/download/" ++ MISE_VERSION ++ "/mise-" ++ MISE_VERSION ++ "-";
 
-const help_text =
-    \\Usage:
-    \\  > sayt {flags} ...(rest)
-    \\
-    \\Subcommands:
-    \\  sayt build (custom) - Runs the configured build task via vscode-task-runner
-    \\  sayt doctor (custom) - Runs environment diagnostics for required tooling
-    \\  sayt generate (custom) - Generates files according to SAY config rules
-    \\  sayt help (custom) - Shows help information for subcommands
-    \\  sayt integrate (custom) - Runs the integrate docker compose workflow
-    \\  sayt launch (custom) - Launches the develop docker compose stack
-    \\  sayt lint (custom) - Runs lint rules from the SAY configuration
-    \\  sayt release (custom) - Builds release artifacts using the release task
-    \\  sayt setup (custom) - Installs runtimes and tools for the project
-    \\  sayt test (custom) - Runs the configured test task via vscode-task-runner
-    \\  sayt verify (custom) - Verifies release artifacts using the same release flow
-    \\
-    \\Flags:
-    \\  -h, --help: show this help message
-    \\  -d, --directory <string>: directory where to run the command (default: '.')
-    \\
-    \\Parameters:
-    \\  ...rest <any>
-    \\
-;
 
 fn getEnvVar(alloc: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return std.process.getEnvVarOwned(alloc, key) catch null;
@@ -80,6 +56,63 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
+fn normalizeVersion(alloc: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    if (std.mem.eql(u8, raw, "latest")) {
+        return alloc.dupe(u8, raw);
+    }
+    if (raw.len > 0 and raw[0] != 'v') {
+        return std.fmt.allocPrint(alloc, "v{s}", .{raw});
+    }
+    return alloc.dupe(u8, raw);
+}
+
+fn releaseUrlBase(alloc: std.mem.Allocator, version: []const u8) ![]const u8 {
+    if (std.mem.eql(u8, version, "latest")) {
+        return alloc.dupe(u8, "https://github.com/bonitao/sayt/releases/latest/download/");
+    }
+    return std.fmt.allocPrint(alloc, "https://github.com/bonitao/sayt/releases/download/{s}/", .{version});
+}
+
+fn fullDistStub(alloc: std.mem.Allocator, version: []const u8, url_base: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(
+        alloc,
+        \\version = "{s}"
+        \\bin = "sayt"
+        \\
+        \\[platforms.linux-amd64]
+        \\url = "{s}sayt-linux-x64.tar.gz"
+        \\
+        \\[platforms.linux-arm64]
+        \\url = "{s}sayt-linux-arm64.tar.gz"
+        \\
+        \\[platforms.linux-armv7]
+        \\url = "{s}sayt-linux-armv7.tar.gz"
+        \\
+        \\[platforms.darwin-amd64]
+        \\url = "{s}sayt-macos-x64.tar.gz"
+        \\
+        \\[platforms.darwin-arm64]
+        \\url = "{s}sayt-macos-arm64.tar.gz"
+        \\
+        \\[platforms.windows-amd64]
+        \\url = "{s}sayt-windows-x64.zip"
+        \\bin = "sayt.exe"
+        \\
+        \\[platforms.windows-arm64]
+        \\url = "{s}sayt-windows-arm64.zip"
+        \\bin = "sayt.exe"
+        \\
+    ,
+        .{ version, url_base, url_base, url_base, url_base, url_base, url_base, url_base },
+    );
+}
+
+fn writeFile(path: []const u8, contents: []const u8) !void {
+    const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(contents);
+}
+
 fn downloadFile(alloc: std.mem.Allocator, url: []const u8, dest: []const u8) !void {
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
@@ -109,13 +142,6 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
-    for (args) |a| {
-        if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
-            try std.io.getStdOut().writeAll(help_text);
-            return;
-        }
-    }
-
     const cache = try getCacheDir(alloc);
     defer alloc.free(cache);
 
@@ -132,47 +158,54 @@ pub fn main() !void {
         try downloadFile(alloc, url, mise_bin);
     }
 
-    // Check for installed sayt
+    const env_ver = getEnvVar(alloc, "SAYT_VERSION");
+    defer if (env_ver) |v| alloc.free(v);
+    const raw_ver = env_ver orelse DEFAULT_VERSION;
+    const ver = try normalizeVersion(alloc, raw_ver);
+    defer alloc.free(ver);
+    const url_base = try releaseUrlBase(alloc, ver);
+    defer alloc.free(url_base);
+
+    // Check for colocated scripts
     var exe_buf: [4096]u8 = undefined;
     const exe_path = std.fs.selfExePath(&exe_buf) catch "";
     const exe_dir = std.fs.path.dirname(exe_path) orelse ".";
-    const install_dir = try std.fs.path.join(alloc, &.{ exe_dir, ".." });
-    defer alloc.free(install_dir);
+    var install_dir = exe_dir;
+    var found_local = false;
 
-    const version_file = try std.fs.path.join(alloc, &.{ install_dir, ".version" });
-    defer alloc.free(version_file);
+    const local_sayt_nu = try std.fs.path.join(alloc, &.{ install_dir, "sayt.nu" });
+    defer alloc.free(local_sayt_nu);
+    if (fileExists(local_sayt_nu)) {
+        found_local = true;
+    } else {
+        const parent_dir = std.fs.path.dirname(exe_dir) orelse exe_dir;
+        if (!std.mem.eql(u8, parent_dir, exe_dir)) {
+            const parent_sayt_nu = try std.fs.path.join(alloc, &.{ parent_dir, "sayt.nu" });
+            defer alloc.free(parent_sayt_nu);
+            if (fileExists(parent_sayt_nu)) {
+                install_dir = parent_dir;
+                found_local = true;
+            }
+        }
+    }
 
     var child_args = std.ArrayList([]const u8).init(alloc);
     defer child_args.deinit();
     try child_args.append(mise_bin);
 
-    if (fileExists(version_file)) {
+    if (found_local) {
         const nu_toml = try std.fs.path.join(alloc, &.{ install_dir, "nu.toml" });
         const sayt_nu = try std.fs.path.join(alloc, &.{ install_dir, "sayt.nu" });
         try child_args.appendSlice(&.{ "tool-stub", nu_toml, sayt_nu });
     } else {
-        const ver = getEnvVar(alloc, "SAYT_VERSION") orelse "latest";
-        const sayt_ver = try std.fmt.allocPrint(alloc, "github:bonitao/sayt@{s}", .{ver});
-        const bin = switch (builtin.os.tag) {
-            .linux => switch (builtin.cpu.arch) {
-                .x86_64 => "sayt-linux-x64",
-                .aarch64 => "sayt-linux-arm64",
-                .arm => "sayt-linux-armv7",
-                else => "sayt-linux-x64", // Fallback or error? defaulting to x64 for unknown linux
-            },
-            .macos => switch (builtin.cpu.arch) {
-                .x86_64 => "sayt-macos-x64",
-                .aarch64 => "sayt-macos-arm64",
-                else => "sayt-macos-arm64", // Fallback
-            },
-            .windows => switch (builtin.cpu.arch) {
-                .x86_64 => "sayt-windows-x64.exe",
-                .aarch64 => "sayt-windows-arm64.exe",
-                else => "sayt-windows-x64.exe", // Fallback
-            },
-            else => "sayt-linux-x64", // Fallback
-        };
-        try child_args.appendSlice(&.{ "exec", sayt_ver, "--", bin });
+        const stub_name = try std.fmt.allocPrint(alloc, "sayt-full-{s}.toml", .{ver});
+        const stub_path = try std.fs.path.join(alloc, &.{ cache, stub_name });
+        if (!fileExists(stub_path)) {
+            const stub = try fullDistStub(alloc, ver, url_base);
+            defer alloc.free(stub);
+            try writeFile(stub_path, stub);
+        }
+        try child_args.appendSlice(&.{ "tool-stub", stub_path });
     }
 
     for (args[1..]) |a| try child_args.append(a);
