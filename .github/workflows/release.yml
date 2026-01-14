@@ -42,6 +42,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -56,6 +59,11 @@ jobs:
           else
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Create source zip
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          zip -r binaries/sayt-${VERSION}.zip . -x "zig-out/*" "binaries/*" ".git/*" ".github/*"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
