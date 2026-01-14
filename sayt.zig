@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const DEFAULT_VERSION = "v0.0.9";
+const DEFAULT_VERSION = "v0.0.10";
 const MISE_VERSION = "v2025.11.11";
 const MISE_URL_BASE = "https://github.com/jdx/mise/releases/download/" ++ MISE_VERSION ++ "/mise-" ++ MISE_VERSION ++ "-";
 
@@ -54,6 +54,30 @@ fn getMiseUrl(alloc: std.mem.Allocator) ![]const u8 {
 fn fileExists(path: []const u8) bool {
     std.fs.cwd().access(path, .{}) catch return false;
     return true;
+}
+
+fn isMuslRuntime() bool {
+    if (builtin.os.tag != .linux) return false;
+    const loader = switch (builtin.cpu.arch) {
+        .x86_64 => "/lib/ld-musl-x86_64.so.1",
+        .aarch64 => "/lib/ld-musl-aarch64.so.1",
+        .arm => "/lib/ld-musl-armhf.so.1",
+        else => return false,
+    };
+    return fileExists(loader);
+}
+
+fn selectNuStub(alloc: std.mem.Allocator, install_dir: []const u8) ![]const u8 {
+    const default_stub = try std.fs.path.join(alloc, &.{ install_dir, "nu.toml" });
+    if (!isMuslRuntime()) return default_stub;
+
+    const musl_stub = try std.fs.path.join(alloc, &.{ install_dir, "nu.musl.toml" });
+    if (fileExists(musl_stub)) {
+        alloc.free(default_stub);
+        return musl_stub;
+    }
+    alloc.free(musl_stub);
+    return default_stub;
 }
 
 fn normalizeVersion(alloc: std.mem.Allocator, raw: []const u8) ![]const u8 {
@@ -117,21 +141,22 @@ fn downloadFile(alloc: std.mem.Allocator, url: []const u8, dest: []const u8) !vo
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
 
-    var buf: [8192]u8 = undefined;
-    var req = try client.open(.GET, try std.Uri.parse(url), .{ .server_header_buffer = &buf });
+    var redirect_buf: [8192]u8 = undefined;
+    var req = try client.request(.GET, try std.Uri.parse(url), .{});
     defer req.deinit();
 
-    try req.send();
-    try req.wait();
+    try req.sendBodiless();
+    var response = try req.receiveHead(&redirect_buf);
 
-    if (req.response.status != .ok) return error.HttpError;
+    if (response.head.status != .ok) return error.HttpError;
 
     const file = try std.fs.cwd().createFile(dest, .{});
     defer file.close();
-    var reader = req.reader();
+    var transfer_buf: [16 * 1024]u8 = undefined;
+    var body_reader = response.reader(&transfer_buf);
     var buf_file: [16 * 1024]u8 = undefined;
     while (true) {
-        const read_len = try reader.read(&buf_file);
+        const read_len = try body_reader.readSliceShort(&buf_file);
         if (read_len == 0) break;
         try file.writeAll(buf_file[0..read_len]);
     }
@@ -192,14 +217,16 @@ pub fn main() !void {
         }
     }
 
-    var child_args = std.ArrayList([]const u8).init(alloc);
-    defer child_args.deinit();
-    try child_args.append(mise_bin);
+    var child_args = std.ArrayList([]const u8).empty;
+    defer child_args.deinit(alloc);
+    try child_args.append(alloc, mise_bin);
 
     if (found_local) {
-        const nu_toml = try std.fs.path.join(alloc, &.{ install_dir, "nu.toml" });
+        const nu_stub = try selectNuStub(alloc, install_dir);
+        defer alloc.free(nu_stub);
         const sayt_nu = try std.fs.path.join(alloc, &.{ install_dir, "sayt.nu" });
-        try child_args.appendSlice(&.{ "tool-stub", nu_toml, sayt_nu });
+        defer alloc.free(sayt_nu);
+        try child_args.appendSlice(alloc, &.{ "tool-stub", nu_stub, sayt_nu });
     } else {
         const stub_name = try std.fmt.allocPrint(alloc, "sayt-full-{s}.toml", .{ver});
         const stub_path = try std.fs.path.join(alloc, &.{ cache, stub_name });
@@ -208,12 +235,31 @@ pub fn main() !void {
             defer alloc.free(stub);
             try writeFile(stub_path, stub);
         }
-        try child_args.appendSlice(&.{ "tool-stub", stub_path });
+        try child_args.appendSlice(alloc, &.{ "tool-stub", stub_path });
     }
 
-    for (args[1..]) |a| try child_args.append(a);
+    for (args[1..]) |a| try child_args.append(alloc, a);
+
+    var env_map = try std.process.getEnvMap(alloc);
+    defer env_map.deinit();
+    const trusted_key = "MISE_TRUSTED_CONFIG_PATHS";
+    const path_sep: u8 = if (builtin.os.tag == .windows) ';' else ':';
+    const mise_config = try std.fs.path.join(alloc, &.{ install_dir, ".mise.toml" });
+    defer alloc.free(mise_config);
+    if (fileExists(mise_config)) {
+        if (env_map.get(trusted_key)) |existing| {
+            if (std.mem.indexOf(u8, existing, install_dir) == null) {
+                const combined = try std.fmt.allocPrint(alloc, "{s}{c}{s}", .{ install_dir, path_sep, existing });
+                defer alloc.free(combined);
+                try env_map.put(trusted_key, combined);
+            }
+        } else {
+            try env_map.put(trusted_key, install_dir);
+        }
+    }
 
     var child = std.process.Child.init(child_args.items, alloc);
+    child.env_map = &env_map;
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;

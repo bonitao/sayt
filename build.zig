@@ -19,12 +19,15 @@ pub fn build(b: *std.Build) void {
     const native_target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{
-        .name = "sayt",
+    const native_module = b.createModule(.{
         .root_source_file = b.path("sayt.zig"),
         .target = native_target,
         .optimize = optimize,
         .link_libc = false,
+    });
+    const exe = b.addExecutable(.{
+        .name = "sayt",
+        .root_module = native_module,
     });
     b.installArtifact(exe);
 
@@ -41,25 +44,31 @@ pub fn build(b: *std.Build) void {
     const all_step = b.step("all", "Build for all target platforms");
 
     for (targets) |t| {
-        const cross_exe = b.addExecutable(.{
-            .name = t.name,
+        const cross_module = b.createModule(.{
             .root_source_file = b.path("sayt.zig"),
             .target = b.resolveTargetQuery(t.target),
             .optimize = .ReleaseSmall,
             .link_libc = false,
+            .strip = true,
         });
-        // For static linking
-        cross_exe.root_module.strip = true;
+        const cross_exe = b.addExecutable(.{
+            .name = t.name,
+            .root_module = cross_module,
+        });
 
         const install_step = b.addInstallArtifact(cross_exe, .{});
         all_step.dependOn(&install_step.step);
     }
 
     // Test step
-    const unit_tests = b.addTest(.{
+    const test_module = b.createModule(.{
         .root_source_file = b.path("sayt.zig"),
         .target = native_target,
         .optimize = optimize,
+        .link_libc = false,
+    });
+    const unit_tests = b.addTest(.{
+        .root_module = test_module,
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");

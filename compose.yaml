@@ -1,9 +1,38 @@
 services:
+  sayt-build:
+    build:
+      context: ../..
+      dockerfile_inline: |
+        FROM chainguard/wolfi-base:latest AS build
+        RUN apk add --no-cache zig
+        WORKDIR /src/plugins/sayt
+        COPY plugins/sayt/ ./
+        ARG TARGETARCH
+        RUN set -e; \
+            arch="$$(printenv TARGETARCH || true)"; \
+            if [ -z "$$arch" ]; then arch="$$(uname -m)"; fi; \
+            case "$$arch" in \
+              amd64) target="x86_64-linux-musl" ;; \
+              arm64) target="aarch64-linux-musl" ;; \
+              x86_64) target="x86_64-linux-musl" ;; \
+              aarch64) target="aarch64-linux-musl" ;; \
+              arm) target="arm-linux-musleabihf" ;; \
+              armv7l) target="arm-linux-musleabihf" ;; \
+              *) echo "Unsupported architecture: $$arch" >&2; exit 1 ;; \
+            esac; \
+            zig build -Doptimize=ReleaseSmall -Dtarget=$$target; \
+            mkdir -p /out; \
+            cp zig-out/bin/sayt /out/sayt; \
+            cp sayt.nu tools.nu dind.nu config.cue /out/; \
+            cp nu.toml nu.musl.toml docker.toml docker.musl.toml uvx.toml uvx.musl.toml cue.toml cue.musl.toml /out/; \
+            cp .mise.toml /out/.mise.toml
+    command: ["sh", "-c", "true"]
+
   integrate-it:
     build:
       context: ../..
       dockerfile_inline: |
-        FROM cgr.dev/chainguard/wolfi-base:latest@sha256:0d8efc73b806c780206b69d62e1b8cb10e9e2eefa0e4452db81b9fa00b1a5175
+        FROM chainguard/wolfi-base:latest
         RUN apk add --no-cache nushell docker-cli docker-cli-buildx docker-compose && \
             mkdir -p /usr/lib/docker/cli-plugins && \
             ln -s /usr/bin/docker-compose /usr/lib/docker/cli-plugins/docker-compose
@@ -16,17 +45,23 @@ services:
   test-alpine:
     build:
       context: .
+      additional_contexts:
+        sayt-build: service:sayt-build
       dockerfile_inline: |
-        FROM alpine/curl:latest@sha256:72c7a3654d014de2ad5220b764396138880ce1ff69ce70f04f95f25f7babc500
-        COPY --chmod=755 saytw /saytw
-        # Release binaries may have issues on Alpine musl; verify download works
-        CMD ["sh", "-c", "/saytw --help 2>&1 || (test -x ~/.cache/sayt/sayt && echo 'Download verified, runtime issue on alpine')"]
+        FROM curlimages/curl:8.5.0@sha256:08e466006f0860e54fc299378de998935333e0e130a15f6f98482e9f8dab3058
+        WORKDIR /home/curl_user/sayt
+        COPY --chown=100:101 --from=sayt-build /out/ ./
+        # Local bootstrap + scripts should run on musl base.
+        CMD ["./sayt", "--help"]
+    depends_on:
+      sayt-build:
+        condition: service_completed_successfully
 
   test-wolfi:
     build:
       context: .
       dockerfile_inline: |
-        FROM cgr.dev/chainguard/wolfi-base:latest@sha256:0d8efc73b806c780206b69d62e1b8cb10e9e2eefa0e4452db81b9fa00b1a5175
+        FROM chainguard/wolfi-base:latest
         COPY --chmod=755 saytw /saytw
         # Release binaries may have issues on wolfi; verify download works
         CMD ["sh", "-c", "/saytw --help 2>&1 || (test -x ~/.cache/sayt/sayt && echo 'Download verified, runtime issue on wolfi')"]
@@ -35,7 +70,7 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM cgr.dev/chainguard/wolfi-base:latest@sha256:0d8efc73b806c780206b69d62e1b8cb10e9e2eefa0e4452db81b9fa00b1a5175
+        FROM chainguard/wolfi-base:latest
         RUN adduser -D testuser
         COPY --chmod=755 saytw /saytw
         USER testuser

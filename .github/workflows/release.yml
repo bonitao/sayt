@@ -25,7 +25,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.14.0
+          version: 0.15.2
 
       - name: Build all platforms
         run: zig build all
@@ -75,9 +75,13 @@ jobs:
             dind.nu
             config.cue
             nu.toml
+            nu.musl.toml
             docker.toml
+            docker.musl.toml
             uvx.toml
+            uvx.musl.toml
             cue.toml
+            cue.musl.toml
             .mise.toml
           )
 

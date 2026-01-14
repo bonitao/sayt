@@ -43,14 +43,14 @@ Release should publish both:
 - `plugins/sayt/sayt.zig` now embeds the full-dist tool-stub and no longer
   uses a `.version` file.
 - `plugins/sayt/.github/workflows/release.yml` builds the full dist archives.
-- `saytw` / `saytw.ps1` normalize and export `SAYT_VERSION` (default `v0.0.9`).
+- `saytw` / `saytw.ps1` normalize and export `SAYT_VERSION` (default `v0.0.10`).
 
 ## Remaining steps to validate
 
 1) Build locally (if Zig permissions allow):
    - `zig build` in `plugins/sayt`
    - If Homebrew Zig fails with permissions, try:
-     - `mise exec zig@0.14.0 -- zig build`
+     - `mise exec zig@0.15.2 -- zig build`
 
 2) Verify runtime flows:
    - With colocated scripts:
