@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const DEFAULT_VERSION = "v0.0.7";
+const DEFAULT_VERSION = "v0.0.8";
 const MISE_VERSION = "v2025.11.11";
 const MISE_URL_BASE = "https://github.com/jdx/mise/releases/download/" ++ MISE_VERSION ++ "/mise-" ++ MISE_VERSION ++ "-";
 
