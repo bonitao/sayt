@@ -43,7 +43,7 @@ Release should publish both:
 - `plugins/sayt/sayt.zig` now embeds the full-dist tool-stub and no longer
   uses a `.version` file.
 - `plugins/sayt/.github/workflows/release.yml` builds the full dist archives.
-- `saytw` / `saytw.ps1` normalize and export `SAYT_VERSION` (default `v0.0.8`).
+- `saytw` / `saytw.ps1` normalize and export `SAYT_VERSION` (default `v0.0.9`).
 
 ## Remaining steps to validate
 

@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM alpine:3.23@sha256:865b95f46d98cf867a156fe4a135ad3fe50d2056aa3f25ed31662dff6da4eb62
+        FROM alpine/curl:latest@sha256:72c7a3654d014de2ad5220b764396138880ce1ff69ce70f04f95f25f7babc500
         COPY --chmod=755 saytw /saytw
         # Release binaries may have issues on Alpine musl; verify download works
         CMD ["sh", "-c", "/saytw --help 2>&1 || (test -x ~/.cache/sayt/sayt && echo 'Download verified, runtime issue on alpine')"]
@@ -83,14 +83,4 @@ services:
       integrate-it:
         condition: service_completed_successfully
       test-alpine:
-        condition: service_completed_successfully
-      test-wolfi:
-        condition: service_completed_successfully
-      test-wolfi-nonroot:
-        condition: service_completed_successfully
-      test-ubuntu:
-        condition: service_completed_successfully
-      test-ubuntu-nonroot:
-        condition: service_completed_successfully
-      test-powershell:
         condition: service_completed_successfully

@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const DEFAULT_VERSION = "v0.0.8";
+const DEFAULT_VERSION = "v0.0.9";
 const MISE_VERSION = "v2025.11.11";
 const MISE_URL_BASE = "https://github.com/jdx/mise/releases/download/" ++ MISE_VERSION ++ "/mise-" ++ MISE_VERSION ++ "-";
 
@@ -126,12 +126,15 @@ fn downloadFile(alloc: std.mem.Allocator, url: []const u8, dest: []const u8) !vo
 
     if (req.response.status != .ok) return error.HttpError;
 
-    const body = try req.reader().readAllAlloc(alloc, 50 * 1024 * 1024);
-    defer alloc.free(body);
-
     const file = try std.fs.cwd().createFile(dest, .{});
     defer file.close();
-    try file.writeAll(body);
+    var reader = req.reader();
+    var buf_file: [16 * 1024]u8 = undefined;
+    while (true) {
+        const read_len = try reader.read(&buf_file);
+        if (read_len == 0) break;
+        try file.writeAll(buf_file[0..read_len]);
+    }
     if (builtin.os.tag != .windows) try file.chmod(0o755);
 }
 
