@@ -4,6 +4,8 @@ const builtin = @import("builtin");
 const DEFAULT_VERSION = "v0.0.10";
 const MISE_VERSION = "v2025.11.11";
 const MISE_URL_BASE = "https://github.com/jdx/mise/releases/download/" ++ MISE_VERSION ++ "/mise-" ++ MISE_VERSION ++ "-";
+const CA_CERTS_FILE = "ca-certificates.crt";
+const EMBEDDED_CA_CERTS = @embedFile(CA_CERTS_FILE);
 
 
 fn getEnvVar(alloc: std.mem.Allocator, key: []const u8) ?[]const u8 {
@@ -36,7 +38,33 @@ fn getCacheDir(alloc: std.mem.Allocator) ![]const u8 {
     return alloc.dupe(u8, "/tmp/sayt");
 }
 
+fn ensureCaBundle(alloc: std.mem.Allocator, cache_dir: []const u8) !?[]const u8 {
+    if (builtin.os.tag == .windows) return null;
+
+    if (getEnvVar(alloc, "SAYT_CA_CERT")) |existing| {
+        if (fileExists(existing)) return existing;
+        alloc.free(existing);
+    }
+    if (getEnvVar(alloc, "SSL_CERT_FILE")) |existing| {
+        if (fileExists(existing)) return existing;
+        alloc.free(existing);
+    }
+
+    const cert_path = try std.fs.path.join(alloc, &.{ cache_dir, CA_CERTS_FILE });
+    if (!fileExists(cert_path)) {
+        std.fs.cwd().makePath(cache_dir) catch {};
+        const file = try std.fs.cwd().createFile(cert_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll(EMBEDDED_CA_CERTS);
+    }
+    return cert_path;
+}
+
 fn getMiseUrl(alloc: std.mem.Allocator) ![]const u8 {
+    if (getEnvVar(alloc, "SAYT_MISE_URL")) |override| {
+        return override;
+    }
+
     const os = switch (builtin.os.tag) {
         .windows => "windows",
         .macos => "macos",
@@ -48,6 +76,13 @@ fn getMiseUrl(alloc: std.mem.Allocator) ![]const u8 {
         else => "x64",
     };
     const suffix: []const u8 = if (builtin.os.tag == .linux) "-musl" else "";
+
+    if (getEnvVar(alloc, "SAYT_MISE_BASE")) |base| {
+        defer alloc.free(base);
+        const trimmed = std.mem.trimRight(u8, base, "/");
+        return std.fmt.allocPrint(alloc, "{s}/mise-{s}-{s}-{s}{s}", .{ trimmed, MISE_VERSION, os, arch, suffix });
+    }
+
     return std.fmt.allocPrint(alloc, MISE_URL_BASE ++ "{s}-{s}{s}", .{ os, arch, suffix });
 }
 
@@ -91,6 +126,11 @@ fn normalizeVersion(alloc: std.mem.Allocator, raw: []const u8) ![]const u8 {
 }
 
 fn releaseUrlBase(alloc: std.mem.Allocator, version: []const u8) ![]const u8 {
+    if (getEnvVar(alloc, "SAYT_RELEASE_BASE")) |override| {
+        defer alloc.free(override);
+        const trimmed = std.mem.trimRight(u8, override, "/");
+        return std.fmt.allocPrint(alloc, "{s}/", .{trimmed});
+    }
     if (std.mem.eql(u8, version, "latest")) {
         return alloc.dupe(u8, "https://github.com/bonitao/sayt/releases/latest/download/");
     }
@@ -137,9 +177,29 @@ fn writeFile(path: []const u8, contents: []const u8) !void {
     try file.writeAll(contents);
 }
 
-fn downloadFile(alloc: std.mem.Allocator, url: []const u8, dest: []const u8) !void {
+fn downloadFile(alloc: std.mem.Allocator, url: []const u8, dest: []const u8, ca_path_override: ?[]const u8) !void {
     var client = std.http.Client{ .allocator = alloc };
     defer client.deinit();
+
+    var ca_path: ?[]const u8 = null;
+    if (ca_path_override) |override| {
+        ca_path = try alloc.dupe(u8, override);
+    } else if (getEnvVar(alloc, "SAYT_CA_CERT")) |env_path| {
+        ca_path = env_path;
+    }
+    defer if (ca_path) |path| alloc.free(path);
+
+    if (ca_path) |path| {
+        const abs_path = if (std.fs.path.isAbsolute(path))
+            try alloc.dupe(u8, path)
+        else
+            try std.fs.path.resolve(alloc, &.{ path });
+        defer alloc.free(abs_path);
+
+        try client.ca_bundle.rescan(alloc);
+        try client.ca_bundle.addCertsFromFilePathAbsolute(alloc, abs_path);
+        client.next_https_rescan_certs = false;
+    }
 
     var redirect_buf: [8192]u8 = undefined;
     var req = try client.request(.GET, try std.Uri.parse(url), .{});
@@ -172,6 +232,8 @@ pub fn main() !void {
 
     const cache = try getCacheDir(alloc);
     defer alloc.free(cache);
+    const ca_bundle = try ensureCaBundle(alloc, cache);
+    defer if (ca_bundle) |path| alloc.free(path);
 
     const mise_dir = try std.fs.path.join(alloc, &.{ cache, "mise-" ++ MISE_VERSION });
     defer alloc.free(mise_dir);
@@ -183,7 +245,7 @@ pub fn main() !void {
     if (!fileExists(mise_bin)) {
         const url = try getMiseUrl(alloc);
         defer alloc.free(url);
-        try downloadFile(alloc, url, mise_bin);
+        try downloadFile(alloc, url, mise_bin, ca_bundle);
     }
 
     const env_ver = getEnvVar(alloc, "SAYT_VERSION");
@@ -255,6 +317,14 @@ pub fn main() !void {
             }
         } else {
             try env_map.put(trusted_key, install_dir);
+        }
+    }
+    if (ca_bundle) |path| {
+        if (env_map.get("SSL_CERT_FILE") == null) {
+            try env_map.put("SSL_CERT_FILE", path);
+        }
+        if (env_map.get("SAYT_CA_CERT") == null) {
+            try env_map.put("SAYT_CA_CERT", path);
         }
     }
 

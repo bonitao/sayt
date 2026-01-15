@@ -22,19 +22,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.15.2
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Build all platforms
-        run: zig build all
+      - name: Build release assets (compose)
+        env:
+          SAYT_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p binaries
+          docker compose -f plugins/sayt/compose.yaml build release-build
+          docker compose -f plugins/sayt/compose.yaml run --rm \
+            -e SAYT_VERSION \
+            -v "${PWD}/binaries:/out" \
+            release-build sh -c 'cp -a "/srv/releases/download/${SAYT_VERSION}/." /out/'
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sayt-binaries
-          path: zig-out/bin/sayt-*
+          path: binaries/*
 
   release:
     needs: build
@@ -65,57 +77,6 @@ jobs:
           VERSION=${{ steps.version.outputs.version }}
           zip -r binaries/sayt-${VERSION}.zip . -x "zig-out/*" "binaries/*" ".git/*" ".github/*"
 
-      - name: Build full dist archives
-        shell: bash
-        run: |
-          set -euo pipefail
-          core_files=(
-            sayt.nu
-            tools.nu
-            dind.nu
-            config.cue
-            nu.toml
-            nu.musl.toml
-            docker.toml
-            docker.musl.toml
-            uvx.toml
-            uvx.musl.toml
-            cue.toml
-            cue.musl.toml
-            .mise.toml
-          )
-
-          build_tar() {
-            local name="$1"
-            local bin="$2"
-            local dir="dist/$name"
-            rm -rf "$dir"
-            mkdir -p "$dir"
-            cp -a "${core_files[@]}" "$dir/"
-            cp "$bin" "$dir/sayt"
-            chmod +x "$dir/sayt"
-            tar -czf "binaries/$name.tar.gz" -C "$dir" .
-          }
-
-          build_zip() {
-            local name="$1"
-            local bin="$2"
-            local dir="dist/$name"
-            rm -rf "$dir"
-            mkdir -p "$dir"
-            cp -a "${core_files[@]}" "$dir/"
-            cp "$bin" "$dir/sayt.exe"
-            (cd "$dir" && zip -r "../../binaries/$name.zip" . >/dev/null)
-          }
-
-          build_tar "sayt-linux-x64" "binaries/sayt-linux-x64"
-          build_tar "sayt-linux-arm64" "binaries/sayt-linux-arm64"
-          build_tar "sayt-linux-armv7" "binaries/sayt-linux-armv7"
-          build_tar "sayt-macos-x64" "binaries/sayt-macos-x64"
-          build_tar "sayt-macos-arm64" "binaries/sayt-macos-arm64"
-          build_zip "sayt-windows-x64" "binaries/sayt-windows-x64.exe"
-          build_zip "sayt-windows-arm64" "binaries/sayt-windows-arm64.exe"
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -138,10 +99,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: sayt-binaries
-          path: zig-out/bin
+          path: binaries
 
-      - name: Make binaries executable
-        run: chmod +x zig-out/bin/sayt-*
+      - name: Prepare binaries
+        run: |
+          mkdir -p zig-out/bin
+          cp binaries/sayt-* zig-out/bin/
+          chmod +x zig-out/bin/sayt-*
 
       - name: Determine version
         id: version

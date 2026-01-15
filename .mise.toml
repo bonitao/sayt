@@ -10,3 +10,4 @@ aqua.minisign = false
 
 [tools]
 zig = "0.15.2"
+"aqua:ip7z/7zip" = "25.01"
